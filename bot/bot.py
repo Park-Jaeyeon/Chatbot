@@ -3,8 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
 
 from telegram.ext import AIORateLimiter, Application, ApplicationBuilder
+
+# Ensure project root is on sys.path when running as a script (python bot/bot.py)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from config import MissingSettingError, Settings, settings
 from bot.gemma_client import GEMMA_CLIENT_KEY, GemmaClient
@@ -49,8 +56,12 @@ def build_application(app_settings: Settings) -> Application:
     return application
 
 
-async def run() -> None:
-    """Configure logging, build handlers, and start polling."""
+def run() -> None:
+    """Configure logging, build handlers, and start polling (blocking)."""
+
+    # Explicitly create/set event loop for compatibility on Windows & Py3.11+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     configure_logging()
     app = build_application(settings)
@@ -60,23 +71,14 @@ async def run() -> None:
         settings.gemma_model,
         settings.gemma_base_url,
     )
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
-
-    try:
-        await asyncio.Event().wait()
-    finally:
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+    app.run_polling(drop_pending_updates=True)
 
 
 def main() -> None:
-    """CLI entrypoint for running the bot with asyncio."""
+    """CLI entrypoint for running the bot."""
 
     try:
-        asyncio.run(run())
+        run()
     except MissingSettingError as exc:
         raise SystemExit(str(exc)) from exc
 
