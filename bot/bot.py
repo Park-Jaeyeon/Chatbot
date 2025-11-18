@@ -20,6 +20,7 @@ from bot.logger import configure_logging
 from bot.memory import JsonFileMemoryStore
 from bot.media_client import MEDIA_CLIENT_KEY, TenorClient
 from bot.stickers import STICKER_STORE_KEY, StickerStore
+from bot.learning import LEARNING_STORE_KEY, LearningStore
 from bot.handlers import register_handlers
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,9 @@ def build_application(app_settings: Settings) -> Application:
     # Simple JSON store for reaction stickers per category.
     sticker_store = StickerStore(ROOT_DIR / "data" / "stickers.json")
 
+    # Simple per-chat learning store for question -> answer overrides.
+    learning_store = LearningStore(ROOT_DIR / "data" / "learning.json")
+
     media_client: TenorClient | None = None
     if app_settings.tenor_api_key:
         media_client = TenorClient(
@@ -74,6 +78,7 @@ def build_application(app_settings: Settings) -> Application:
 
         application.bot_data["memory_store"] = memory_store
         application.bot_data[STICKER_STORE_KEY] = sticker_store
+        application.bot_data[LEARNING_STORE_KEY] = learning_store
         logger.info(
             "Gemma client 초기화 완료 | model=%s | base_url=%s",
             gemma_client.model,
@@ -91,6 +96,7 @@ def build_application(app_settings: Settings) -> Application:
         application.bot_data.pop(MEDIA_CLIENT_KEY, None)
         application.bot_data.pop("memory_store", None)
         application.bot_data.pop(STICKER_STORE_KEY, None)
+        application.bot_data.pop(LEARNING_STORE_KEY, None)
         logger.info("Gemma/Gemini/Media/Sticker client 연결을 정상적으로 종료했습니다.")
 
     application = (

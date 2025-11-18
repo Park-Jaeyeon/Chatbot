@@ -23,6 +23,7 @@ from bot.gemini_client import GEMINI_CLIENT_KEY, GeminiClient, GeminiClientError
 from bot.media_client import MEDIA_CLIENT_KEY, TenorClient, MediaClientError
 from bot.memory import MemoryStore
 from bot.stickers import STICKER_STORE_KEY, StickerStore
+from bot.learning import LEARNING_STORE_KEY, LearningStore
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,13 @@ def _get_media_client(context: ContextTypes.DEFAULT_TYPE) -> TenorClient | None:
 def _get_sticker_store(context: ContextTypes.DEFAULT_TYPE) -> StickerStore | None:
     store = context.application.bot_data.get(STICKER_STORE_KEY)
     if isinstance(store, StickerStore):
+        return store
+    return None
+
+
+def _get_learning_store(context: ContextTypes.DEFAULT_TYPE) -> LearningStore | None:
+    store = context.application.bot_data.get(LEARNING_STORE_KEY)
+    if isinstance(store, LearningStore):
         return store
     return None
 
@@ -272,7 +280,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "궁금한 내용을 자연어로 질문하면 Gemma 가 답변해 줍니다. /start 로 초기 안내를 볼 수 있습니다."
+        "궁금한 내용을 자연어로 질문하면 Gemma 가 답변해 준다. /start 로 초기 안내를 볼 수 있다.\n"
+        "/learn 명령으로 질문-답변을 직접 가르칠 수도 있다. 형식: /learn 질문|답변"
     )
 
 
@@ -283,6 +292,41 @@ async def clear_memory_command(update: Update, context: ContextTypes.DEFAULT_TYP
         store.clear(chat_id)
     context.chat_data.pop(HISTORY_KEY, None)
     await update.message.reply_text("이 채팅의 대화 히스토리를 모두 삭제했어요.")
+
+
+async def learn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """사용자가 직접 질문|답변 형태로 봇에게 가르치는 명령."""
+
+    message = update.message
+    if not message or not message.text:
+        return
+
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is None:
+        await message.reply_text("채팅 ID 를 찾지 못했다. 다시 시도해라.")
+        return
+
+    store = _get_learning_store(context)
+    if store is None:
+        await message.reply_text("학습 저장소 초기화에 실패했다. 나중에 다시 시도해라.")
+        return
+
+    # /learn 명령어 다음 전체 텍스트에서 첫 번째 '|' 기준으로 나눈다.
+    # 예: /learn 해병 문학이 뭐냐|니가 방금 말한 그 정신이다.
+    raw = message.text[len("/learn") :].strip()
+    if "|" not in raw:
+        await message.reply_text("형식이 잘못됐다. '/learn 질문|답변' 형식으로 입력해라.")
+        return
+
+    q_part, a_part = raw.split("|", 1)
+    question = q_part.strip()
+    answer = a_part.strip()
+    if not question or not answer:
+        await message.reply_text("질문과 답변 둘 다 비어 있으면 안 된다. 다시 입력해라.")
+        return
+
+    store.add(chat_id, question, answer)
+    await message.reply_text("좋다. 지금부터 그 질문에는 네가 알려준 답으로 응답하겠다.")
 
 
 async def list_stickers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -354,6 +398,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await _send_typing(update)
+
+    # 0) 사용자가 /learn 으로 가르친 질문이면, LLM 호출 없이 바로 답한다.
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    learning_store = _get_learning_store(context)
+    if chat_id is not None and learning_store is not None:
+        learned_answer = learning_store.find_exact(chat_id, text)
+        if learned_answer:
+            await message.reply_text(learned_answer)
+            _update_history(context, chat_id, text, learned_answer)
+            return
 
     chat_id = update.effective_chat.id if update.effective_chat else None
     history = _get_history(context, chat_id)
@@ -589,6 +643,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("clear_memory", clear_memory_command))
+    application.add_handler(CommandHandler("learn", learn_command))
     application.add_handler(CommandHandler("list_stickers", list_stickers_command))
     application.add_handler(CommandHandler("clear_stickers", clear_stickers_command))
     application.add_handler(CommandHandler("use_stickers", set_sticker_users_command))
