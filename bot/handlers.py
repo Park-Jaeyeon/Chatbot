@@ -247,6 +247,19 @@ async def list_stickers_command(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("저장된 스티커 목록:\n" + "\n".join(lines))
 
 
+async def clear_stickers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = _get_sticker_store(context)
+    if store is None:
+        await update.message.reply_text("스티커 저장소가 초기화되지 않았습니다.")
+        return
+
+    # 명시된 카테고리만 삭제. 지정 없으면 misc 를 기본값으로
+    args = context.args if context.args else []
+    category = args[0] if args else "misc"
+    store.clear_category(category)
+    await update.message.reply_text(f"'{category}' 카테고리의 스티커를 삭제했습니다.")
+
+
 async def enable_media_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _set_media_enabled(context, True)
     await update.message.reply_text("이 채팅에서 움짤/스티커 자동 반응을 켰습니다.")
@@ -392,14 +405,27 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if category is None and message.reply_to_message and message.reply_to_message.text:
         category = _infer_reaction_category(message.reply_to_message.text)
 
+    # 카테고리 추론이 안 되더라도 'misc'로 저장해서 누락을 방지
     if not category:
-        return
+        category = "misc"
 
     store = _get_sticker_store(context)
     if store is None:
         return
 
+    # 단일 스티커 저장
     store.add(category, sticker.file_id)
+
+    # 스티커 세트 전체를 같은 카테고리에 일괄 저장 (관리자가 나중에 clear 가능)
+    if sticker.set_name:
+        try:
+            set_obj = await context.bot.get_sticker_set(name=sticker.set_name)
+            file_ids = [s.file_id for s in set_obj.stickers or []]
+            added = store.add_bulk(category, file_ids)
+            if added:
+                logger.info("스티커 세트 '%s'에서 %d개 추가 | category=%s", sticker.set_name, added, category)
+        except Exception:  # pragma: no cover - best effort
+            logger.exception("스티커 세트 저장 실패 | set=%s", sticker.set_name)
 
 
 def register_handlers(application: Application) -> None:
@@ -407,6 +433,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("clear_memory", clear_memory_command))
     application.add_handler(CommandHandler("list_stickers", list_stickers_command))
+    application.add_handler(CommandHandler("clear_stickers", clear_stickers_command))
     application.add_handler(CommandHandler("enable_media", enable_media_command))
     application.add_handler(CommandHandler("disable_media", disable_media_command))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))

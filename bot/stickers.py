@@ -64,3 +64,16 @@ class StickerStore:
         if category in data:
             data.pop(category, None)
             self._write_all(data)
+
+    def add_bulk(self, category: str, file_ids: List[str]) -> int:
+        """대량 스티커 추가. 이미 있는 것은 건너뛰고 추가된 개수를 반환."""
+        data = self._read_all()
+        bucket = data.setdefault(category, [])
+        added = 0
+        for fid in file_ids:
+            if fid not in bucket:
+                bucket.append(fid)
+                added += 1
+        if added:
+            self._write_all(data)
+        return added
