@@ -36,8 +36,8 @@ MEDIA_PROB_PRIVATE = 0.6
 # 스티커 사용 시 허용 사용자 id 리스트 (없으면 전체)
 STICKER_ALLOWED_USERS_KEY = "sticker_allowed_users"
 # 인라인 처리 타임아웃 (초)
-INLINE_TEXT_TIMEOUT = 6.0
-INLINE_MEDIA_TIMEOUT = 3.0
+INLINE_TEXT_TIMEOUT = 4.0
+INLINE_MEDIA_TIMEOUT = 1.5
 
 DEFAULT_SYSTEM_PROMPT = dedent(
     """
