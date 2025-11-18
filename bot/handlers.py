@@ -403,10 +403,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id if update.effective_chat else None
     learning_store = _get_learning_store(context)
     if chat_id is not None and learning_store is not None:
+        # 0-1) 정확히 가르친 질문
         learned_answer = learning_store.find_exact(chat_id, text)
         if learned_answer:
             await message.reply_text(learned_answer)
             _update_history(context, chat_id, text, learned_answer)
+            return
+        # 0-2) 유사 질문도 찾아본다
+        similar = learning_store.find_similar(chat_id, text, threshold=0.4)
+        if similar:
+            _, ans = similar
+            await message.reply_text(ans)
+            _update_history(context, chat_id, text, ans)
             return
 
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -616,6 +624,15 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # 인라인에서는 Gemini 폴백을 사용하지 않고,
     # Gemma 가 실패하면 간단한 안내 문구를 반환한다.
+    if not reply_text:
+        learning_store = _get_learning_store(context)
+        chat_id = update.effective_user.id if update.effective_user else None
+        if learning_store is not None and chat_id is not None:
+            similar = learning_store.find_similar(chat_id, query, threshold=0.4)
+            if similar:
+                _, ans = similar
+                reply_text = ans
+
     if not reply_text:
         reply_text = "지금은 인라인으로 답변을 생성하지 못했다. 채팅에서 직접 물어봐라."
 
