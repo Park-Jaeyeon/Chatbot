@@ -557,11 +557,10 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
             timeout=INLINE_TEXT_TIMEOUT,
         )
         reply_text = gemma_response.text.strip()
-        if reply_text.upper() == "UNSURE":
-            reply_text = ""
     except (GemmaClientError, asyncio.TimeoutError):
         reply_text = ""
 
+    # Gemma 가 실패했을 때만 Gemini 를 시도한다.
     if not reply_text:
         gemini_client = _get_gemini_client(context)
         if gemini_client:
