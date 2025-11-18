@@ -508,7 +508,7 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """인라인 모드 응답: 요약 텍스트 + (가능하면) GIF 제안."""
+    """인라인 모드 응답: 요약 텍스트만 반환 (GIF 제외)."""
 
     if not update.inline_query:
         return
@@ -586,26 +586,6 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
                 input_message_content=InputTextMessageContent(reply_text),
             )
         )
-
-    # 2) GIF 제안 (Tenor)
-    media_client = _get_media_client(context)
-    if media_client:
-        try:
-            gif = await asyncio.wait_for(
-                media_client.search_gif(query),
-                timeout=INLINE_MEDIA_TIMEOUT,
-            )
-            if gif:
-                results.append(
-                    InlineQueryResultGif(
-                        id=str(uuid4()),
-                        gif_url=gif.url,
-                        thumbnail_url=gif.url,
-                        title="움짤 하나 던진다",
-                    )
-                )
-        except (MediaClientError, asyncio.TimeoutError):
-            logger.exception("인라인 GIF 검색 실패")
 
     # 결과가 없다면 기본 안내라도 반환
     if not results:
