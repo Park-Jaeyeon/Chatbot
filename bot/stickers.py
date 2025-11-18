@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 STICKER_STORE_KEY = "sticker_store"
 
@@ -83,6 +83,24 @@ class StickerStore:
         data = self._read_all()
         return {k: len(v) for k, v in data.items() if isinstance(v, list) and k != "_meta"}
 
+    def list_counts_with_owners(self) -> Dict[str, Dict[str, object]]:
+        """카테고리별 스티커 개수와 owner 빈도를 반환."""
+        data = self._read_all()
+        owners = self._load_meta()
+        result: Dict[str, Dict[str, object]] = {}
+        for cat, items in data.items():
+            if not isinstance(items, list) or cat == "_meta":
+                continue
+            owner_counts: Dict[int, int] = {}
+            for fid in items:
+                for uid in owners.get(fid, []):
+                    owner_counts[uid] = owner_counts.get(uid, 0) + 1
+            result[cat] = {
+                "count": len(items),
+                "owners": owner_counts,
+            }
+        return result
+
     def clear_category(self, category: str) -> None:
         data = self._read_all()
         owners = self._load_meta()
@@ -109,3 +127,21 @@ class StickerStore:
         if added or user_id is not None:
             self._write_meta(data, owners)
         return added
+
+    def get_random_filtered(self, category: str, *, allowed_user_ids: Optional[Sequence[int]] = None) -> Optional[str]:
+        """특정 사용자 목록의 스티커만 선택(목록 없으면 전체에서 선택)."""
+        data = self._read_all()
+        owners = self._load_meta()
+        bucket = data.get(category) or []
+        if not bucket:
+            return None
+        # 필터가 없으면 바로 랜덤
+        if not allowed_user_ids:
+            return random.choice(bucket)
+
+        allowed = set(int(u) for u in allowed_user_ids)
+        filtered = [fid for fid in bucket if allowed.intersection(owners.get(fid, []))]
+        if filtered:
+            return random.choice(filtered)
+        # 필터에 맞는 스티커가 없으면 None
+        return None

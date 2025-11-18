@@ -25,6 +25,8 @@ MEDIA_ENABLED_KEY = "media_enabled"
 # 미디어 반응 확률 (과도한 스팸을 막기 위해 조절)
 MEDIA_PROB_GROUP = 0.35
 MEDIA_PROB_PRIVATE = 0.6
+# 스티커 사용 시 허용 사용자 id 리스트 (없으면 전체)
+STICKER_ALLOWED_USERS_KEY = "sticker_allowed_users"
 
 DEFAULT_SYSTEM_PROMPT = dedent(
     """
@@ -68,6 +70,23 @@ def _get_media_enabled(context: ContextTypes.DEFAULT_TYPE) -> bool:
 
 def _set_media_enabled(context: ContextTypes.DEFAULT_TYPE, enabled: bool) -> None:
     context.chat_data[MEDIA_ENABLED_KEY] = enabled
+
+
+def _get_allowed_users(context: ContextTypes.DEFAULT_TYPE) -> list[int] | None:
+    users = context.chat_data.get(STICKER_ALLOWED_USERS_KEY)
+    if isinstance(users, list):
+        try:
+            return [int(u) for u in users]
+        except Exception:  # pragma: no cover
+            return None
+    return None
+
+
+def _set_allowed_users(context: ContextTypes.DEFAULT_TYPE, users: list[int] | None) -> None:
+    if users is None:
+        context.chat_data.pop(STICKER_ALLOWED_USERS_KEY, None)
+    else:
+        context.chat_data[STICKER_ALLOWED_USERS_KEY] = list(users)
 
 
 def _get_gemini_client(context: ContextTypes.DEFAULT_TYPE) -> GeminiClient | None:
@@ -239,11 +258,16 @@ async def list_stickers_command(update: Update, context: ContextTypes.DEFAULT_TY
     if store is None:
         await update.message.reply_text("스티커 저장소가 초기화되지 않았습니다.")
         return
-    counts = store.list_counts()
+    counts = store.list_counts_with_owners()
     if not counts:
         await update.message.reply_text("아직 저장된 스티커가 없습니다.")
         return
-    lines = [f"- {cat}: {count}개" for cat, count in sorted(counts.items())]
+    lines: list[str] = []
+    for cat, info in sorted(counts.items()):
+        cnt = info.get("count", 0)
+        owners = info.get("owners", {})
+        owner_str = ", ".join(f"{uid}({c})" for uid, c in sorted(owners.items(), key=lambda x: -x[1]))
+        lines.append(f"- {cat}: {cnt}개" + (f" | owners: {owner_str}" if owner_str else ""))
     await update.message.reply_text("저장된 스티커 목록:\n" + "\n".join(lines))
 
 
@@ -258,6 +282,24 @@ async def clear_stickers_command(update: Update, context: ContextTypes.DEFAULT_T
     category = args[0] if args else "misc"
     store.clear_category(category)
     await update.message.reply_text(f"'{category}' 카테고리의 스티커를 삭제했습니다.")
+
+
+async def set_sticker_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """스티커 사용을 특정 user_id 목록으로 제한하거나 전체 허용."""
+
+    if not context.args:
+        _set_allowed_users(context, None)
+        await update.message.reply_text("스티커 사용 대상을 전체로 초기화했습니다.")
+        return
+
+    try:
+        users = [int(arg) for arg in context.args if arg.strip()]
+    except ValueError:
+        await update.message.reply_text("user_id 는 숫자로 입력해주세요. 예: /use_stickers 12345 67890")
+        return
+
+    _set_allowed_users(context, users)
+    await update.message.reply_text(f"스티커 사용을 다음 user_id 로 제한했습니다: {', '.join(map(str, users))}")
 
 
 async def enable_media_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -353,7 +395,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # 3-1) 먼저 카테고리별로 저장된 스티커가 있으면 그것부터 사용
     sticker_store = _get_sticker_store(context)
     if sticker_store is not None and reaction_category is not None and message:
-        sticker_id = sticker_store.get_random(reaction_category)
+        allowed_users = _get_allowed_users(context)
+        sticker_id = sticker_store.get_random_filtered(
+            reaction_category,
+            allowed_user_ids=allowed_users,
+        )
         if sticker_id:
             try:
                 await message.reply_sticker(sticker=sticker_id)
@@ -435,6 +481,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("clear_memory", clear_memory_command))
     application.add_handler(CommandHandler("list_stickers", list_stickers_command))
     application.add_handler(CommandHandler("clear_stickers", clear_stickers_command))
+    application.add_handler(CommandHandler("use_stickers", set_sticker_users_command))
     application.add_handler(CommandHandler("enable_media", enable_media_command))
     application.add_handler(CommandHandler("disable_media", disable_media_command))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
