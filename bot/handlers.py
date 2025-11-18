@@ -524,7 +524,13 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
                 input_message_content=content,
             )
         )
-        await update.inline_query.answer(results, cache_time=5, is_personal=True)
+        try:
+            await update.inline_query.answer(results, cache_time=5, is_personal=True)
+        except telegram.error.BadRequest as exc:
+            if "Query is too old" in str(exc) or "query id is invalid" in str(exc):
+                logger.warning("인라인 쿼리 응답 실패 (stale): %s", exc)
+                return
+            raise
         return
 
     # 1) 텍스트 요약/응답 (Gemma/Gemini) - 빠르게 응답하기 위해 타임아웃 적용
