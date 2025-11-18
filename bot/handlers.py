@@ -5,9 +5,15 @@ import logging
 import random
 from textwrap import dedent
 
-from telegram import Update
+from telegram import (
+    InlineQueryResultArticle,
+    InlineQueryResultGif,
+    InputTextMessageContent,
+    Update,
+)
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, InlineQueryHandler
+from uuid import uuid4
 
 from bot.gemma_client import GEMMA_CLIENT_KEY, GemmaClient, GemmaClientError
 from bot.gemini_client import GEMINI_CLIENT_KEY, GeminiClient, GeminiClientError
@@ -493,6 +499,97 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.exception("스티커 세트 저장 실패 | set=%s", sticker.set_name)
 
 
+async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """인라인 모드 응답: 요약 텍스트 + (가능하면) GIF 제안."""
+
+    if not update.inline_query:
+        return
+
+    query = (update.inline_query.query or "").strip()
+    results = []
+
+    # 기본 안내
+    if not query:
+        content = InputTextMessageContent("질문을 입력해라. 핵심만 간단히 적어라.")
+        results.append(
+            InlineQueryResultArticle(
+                id=str(uuid4()),
+                title="무엇을 도와줄까",
+                description="질문을 입력하면 해병 톤으로 답변한다.",
+                input_message_content=content,
+            )
+        )
+        await update.inline_query.answer(results, cache_time=5, is_personal=True)
+        return
+
+    # 1) 텍스트 요약/응답 (Gemma/Gemini)
+    reply_text = ""
+    prompt = _build_prompt_with_history([], query)
+    try:
+        gemma_client = _get_client(context)
+        gemma_response = await gemma_client.generate(
+            prompt,
+            system_prompt=DEFAULT_SYSTEM_PROMPT,
+        )
+        reply_text = gemma_response.text.strip()
+        if reply_text.upper() == "UNSURE":
+            reply_text = ""
+    except GemmaClientError:
+        reply_text = ""
+
+    if not reply_text:
+        gemini_client = _get_gemini_client(context)
+        if gemini_client:
+            try:
+                gemini_response = await gemini_client.generate(
+                    prompt,
+                    system_prompt=DEFAULT_SYSTEM_PROMPT,
+                )
+                reply_text = gemini_response.text.strip()
+            except GeminiClientError:
+                reply_text = ""
+
+    if reply_text:
+        results.append(
+            InlineQueryResultArticle(
+                id=str(uuid4()),
+                title="해병 톤 답변",
+                description=reply_text[:60] + ("..." if len(reply_text) > 60 else ""),
+                input_message_content=InputTextMessageContent(reply_text),
+            )
+        )
+
+    # 2) GIF 제안 (Tenor)
+    media_client = _get_media_client(context)
+    if media_client:
+        try:
+            gif = await media_client.search_gif(query)
+            if gif:
+                results.append(
+                    InlineQueryResultGif(
+                        id=str(uuid4()),
+                        gif_url=gif.url,
+                        thumbnail_url=gif.url,
+                        title="움짤 하나 던진다",
+                    )
+                )
+        except MediaClientError:
+            logger.exception("인라인 GIF 검색 실패")
+
+    # 결과가 없다면 기본 안내라도 반환
+    if not results:
+        results.append(
+            InlineQueryResultArticle(
+                id=str(uuid4()),
+                title="답변을 생성하지 못했다",
+                description="질문을 조금 다르게 적어봐라.",
+                input_message_content=InputTextMessageContent("답변을 생성하지 못했다. 질문을 다시 적어봐라."),
+            )
+        )
+
+    await update.inline_query.answer(results, cache_time=3, is_personal=True)
+
+
 def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
@@ -502,6 +599,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("use_stickers", set_sticker_users_command))
     application.add_handler(CommandHandler("enable_media", enable_media_command))
     application.add_handler(CommandHandler("disable_media", disable_media_command))
+    application.add_handler(InlineQueryHandler(handle_inline_query))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     application.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
 
