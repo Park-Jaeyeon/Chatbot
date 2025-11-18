@@ -5,6 +5,7 @@ import asyncio
 import logging
 import random
 from textwrap import dedent
+from collections import deque
 
 from telegram import (
     InlineQueryResultArticle,
@@ -38,6 +39,8 @@ STICKER_ALLOWED_USERS_KEY = "sticker_allowed_users"
 # 인라인 처리 타임아웃 (초)
 INLINE_TEXT_TIMEOUT = 4.0
 INLINE_MEDIA_TIMEOUT = 1.5
+INLINE_SEEN_IDS_KEY = "inline_seen_ids"
+INLINE_SEEN_MAX = 200
 
 DEFAULT_SYSTEM_PROMPT = dedent(
     """
@@ -510,6 +513,13 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not update.inline_query:
         return
 
+    # 동일 query_id 중복 응답 피하기 (stale 방지)
+    seen_ids: deque[str] = context.application.bot_data.setdefault(
+        INLINE_SEEN_IDS_KEY, deque(maxlen=INLINE_SEEN_MAX)
+    )
+    if update.inline_query.id in seen_ids:
+        return
+
     query = (update.inline_query.query or "").strip()
     results = []
 
@@ -526,6 +536,7 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         try:
             await update.inline_query.answer(results, cache_time=5, is_personal=True)
+            seen_ids.append(update.inline_query.id)
         except telegram.error.BadRequest as exc:
             if "Query is too old" in str(exc) or "query id is invalid" in str(exc):
                 logger.warning("인라인 쿼리 응답 실패 (stale): %s", exc)
@@ -609,6 +620,7 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         await update.inline_query.answer(results, cache_time=3, is_personal=True)
+        seen_ids.append(update.inline_query.id)
     except telegram.error.BadRequest as exc:
         # 오래된 쿼리(혹은 중복 응답) 에러는 무시
         if "Query is too old" in str(exc) or "query id is invalid" in str(exc):
