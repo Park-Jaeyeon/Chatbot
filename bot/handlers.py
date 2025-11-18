@@ -12,6 +12,7 @@ from telegram import (
     InputTextMessageContent,
     Update,
 )
+import telegram
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, InlineQueryHandler
 from uuid import uuid4
