@@ -41,12 +41,36 @@ class StickerStore:
         tmp_path.write_text(text, encoding="utf-8")
         tmp_path.replace(self._path)
 
-    def add(self, category: str, file_id: str) -> None:
+    def _load_meta(self) -> Dict[str, Dict[str, List[int]]]:
+        """메타 정보 저장용 특수 키를 별도로 관리한다."""
+        # _meta 구조: {"owners": {file_id: [user_ids...]}}
         data = self._read_all()
+        meta_raw = data.get("_meta")
+        owners: Dict[str, List[int]] = {}
+        if isinstance(meta_raw, dict):
+            meta_owners = meta_raw.get("owners")
+            if isinstance(meta_owners, dict):
+                for fid, lst in meta_owners.items():
+                    if isinstance(lst, list):
+                        owners[str(fid)] = [int(x) for x in lst if isinstance(x, (int, float, str))]
+        return owners
+
+    def _write_meta(self, data: Dict[str, List[str]], owners: Dict[str, List[int]]) -> None:
+        # data 에 _meta 키를 다시 주입
+        data["_meta"] = {"owners": owners}
+        self._write_all(data)
+
+    def add(self, category: str, file_id: str, *, user_id: Optional[int] = None) -> None:
+        data = self._read_all()
+        owners = self._load_meta()
         bucket = data.setdefault(category, [])
         if file_id not in bucket:
             bucket.append(file_id)
-            self._write_all(data)
+        if user_id is not None:
+            arr = owners.setdefault(file_id, [])
+            if user_id not in arr:
+                arr.append(user_id)
+        self._write_meta(data, owners)
 
     def get_random(self, category: str) -> Optional[str]:
         data = self._read_all()
@@ -57,23 +81,31 @@ class StickerStore:
 
     def list_counts(self) -> Dict[str, int]:
         data = self._read_all()
-        return {k: len(v) for k, v in data.items()}
+        return {k: len(v) for k, v in data.items() if isinstance(v, list) and k != "_meta"}
 
     def clear_category(self, category: str) -> None:
         data = self._read_all()
-        if category in data:
-            data.pop(category, None)
-            self._write_all(data)
+        owners = self._load_meta()
+        removed = data.pop(category, None) if category in data else None
+        if removed and isinstance(removed, list):
+            for fid in removed:
+                owners.pop(str(fid), None)
+        self._write_meta(data, owners)
 
-    def add_bulk(self, category: str, file_ids: List[str]) -> int:
+    def add_bulk(self, category: str, file_ids: List[str], *, user_id: Optional[int] = None) -> int:
         """대량 스티커 추가. 이미 있는 것은 건너뛰고 추가된 개수를 반환."""
         data = self._read_all()
+        owners = self._load_meta()
         bucket = data.setdefault(category, [])
         added = 0
         for fid in file_ids:
             if fid not in bucket:
                 bucket.append(fid)
                 added += 1
-        if added:
-            self._write_all(data)
+            if user_id is not None:
+                arr = owners.setdefault(fid, [])
+                if user_id not in arr:
+                    arr.append(user_id)
+        if added or user_id is not None:
+            self._write_meta(data, owners)
         return added

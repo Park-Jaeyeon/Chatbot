@@ -389,6 +389,7 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     sticker = message.sticker
     chat_id = update.effective_chat.id if update.effective_chat else None
+    user_id = update.effective_user.id if update.effective_user else None
     if chat_id is None:
         return
 
@@ -414,14 +415,14 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     # 단일 스티커 저장
-    store.add(category, sticker.file_id)
+    store.add(category, sticker.file_id, user_id=user_id)
 
     # 스티커 세트 전체를 같은 카테고리에 일괄 저장 (관리자가 나중에 clear 가능)
     if sticker.set_name:
         try:
             set_obj = await context.bot.get_sticker_set(name=sticker.set_name)
             file_ids = [s.file_id for s in set_obj.stickers or []]
-            added = store.add_bulk(category, file_ids)
+            added = store.add_bulk(category, file_ids, user_id=user_id)
             if added:
                 logger.info("스티커 세트 '%s'에서 %d개 추가 | category=%s", sticker.set_name, added, category)
         except Exception:  # pragma: no cover - best effort
