@@ -55,3 +55,12 @@ class StickerStore:
             return None
         return random.choice(bucket)
 
+    def list_counts(self) -> Dict[str, int]:
+        data = self._read_all()
+        return {k: len(v) for k, v in data.items()}
+
+    def clear_category(self, category: str) -> None:
+        data = self._read_all()
+        if category in data:
+            data.pop(category, None)
+            self._write_all(data)

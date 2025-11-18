@@ -45,7 +45,10 @@ def build_application(app_settings: Settings) -> Application:
 
     # Very lightweight JSON-based memory store so the bot can
     # remember recent conversations per chat across restarts.
-    memory_store = JsonFileMemoryStore(ROOT_DIR / "data" / "user_memory.json")
+    memory_store = JsonFileMemoryStore(
+        ROOT_DIR / "data" / "user_memory.json",
+        max_messages=120,  # 안전빵으로 60턴 정도까지 유지
+    )
 
     # Simple JSON store for reaction stickers per category.
     sticker_store = StickerStore(ROOT_DIR / "data" / "stickers.json")

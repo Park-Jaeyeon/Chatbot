@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from textwrap import dedent
 
 from telegram import Update
@@ -19,6 +20,11 @@ logger = logging.getLogger(__name__)
 HISTORY_KEY = "conversation_history"
 # 너무 많은 히스토리를 보내면 응답이 느려지므로 최근 3턴만 유지
 MAX_HISTORY_TURNS = 3
+# 채팅별 미디어(스티커/GIF) 기능 토글 키
+MEDIA_ENABLED_KEY = "media_enabled"
+# 미디어 반응 확률 (과도한 스팸을 막기 위해 조절)
+MEDIA_PROB_GROUP = 0.35
+MEDIA_PROB_PRIVATE = 0.6
 
 DEFAULT_SYSTEM_PROMPT = dedent(
     """
@@ -27,7 +33,7 @@ DEFAULT_SYSTEM_PROMPT = dedent(
     - 항상 한국어로 정중한 존댓말로 대화합니다.
     - 영어를 괄호 안에 넣어 예: 안녕하세요(Hello) 와 같이 표기하지 않습니다.
     - 사용자가 영어로 말하더라도, 답변은 한국어로 자연스럽게 번역하여 설명합니다.
-    - 답변은 불필요하게 길지 않게 유지하되, 사용자가 이해하기에 충분한 근거와 예시를 제공합니다.
+    - 답변은 2~3문단 또는 bullet 3~5개 내에서 끝내고, 불필요하게 길지 않게 유지합니다.
     - 대화 히스토리가 함께 주어지면 이를 잘 참고하여 일관된 맥락을 유지합니다.
     - 사실이 불확실한 내용은 단정적으로 말하지 말고, 추측임을 분명히 밝힙니다.
     - 만약 질문이 당신의 지식 범위를 벗어나거나 확실한 답을 할 수 없다고 판단되면,
@@ -53,6 +59,15 @@ def _get_memory_store(context: ContextTypes.DEFAULT_TYPE) -> MemoryStore | None:
     if isinstance(store, MemoryStore):
         return store
     return None
+
+
+def _get_media_enabled(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    # 기본은 켜짐
+    return context.chat_data.get(MEDIA_ENABLED_KEY, True)
+
+
+def _set_media_enabled(context: ContextTypes.DEFAULT_TYPE, enabled: bool) -> None:
+    context.chat_data[MEDIA_ENABLED_KEY] = enabled
 
 
 def _get_gemini_client(context: ContextTypes.DEFAULT_TYPE) -> GeminiClient | None:
@@ -210,6 +225,38 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+async def clear_memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    store = _get_memory_store(context)
+    if chat_id is not None and store is not None:
+        store.clear(chat_id)
+    context.chat_data.pop(HISTORY_KEY, None)
+    await update.message.reply_text("이 채팅의 대화 히스토리를 모두 삭제했어요.")
+
+
+async def list_stickers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = _get_sticker_store(context)
+    if store is None:
+        await update.message.reply_text("스티커 저장소가 초기화되지 않았습니다.")
+        return
+    counts = store.list_counts()
+    if not counts:
+        await update.message.reply_text("아직 저장된 스티커가 없습니다.")
+        return
+    lines = [f"- {cat}: {count}개" for cat, count in sorted(counts.items())]
+    await update.message.reply_text("저장된 스티커 목록:\n" + "\n".join(lines))
+
+
+async def enable_media_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _set_media_enabled(context, True)
+    await update.message.reply_text("이 채팅에서 움짤/스티커 자동 반응을 켰습니다.")
+
+
+async def disable_media_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _set_media_enabled(context, False)
+    await update.message.reply_text("이 채팅에서 움짤/스티커 자동 반응을 껐습니다.")
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message or not message.text:
@@ -267,13 +314,26 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await message.reply_text(reply_text)
     _update_history(context, chat_id, text, reply_text)
 
-    # 3) 상황/텍스트에 맞춰 스티커/짤/GIF 를 자동으로 추천
+    # 3) 상황/텍스트에 맞춰 스티커/짤/GIF 를 자동으로 추천 (확률/토글 기반)
     lowered = text.lower()
     reaction_query = _infer_reaction_query(text)
     reaction_category = _infer_reaction_category(text)
     explicit_media_request = any(
         keyword in lowered for keyword in ("gif", "짤", "밈", "움짤", "사진", "이미지", "그림")
     )
+
+    media_enabled = _get_media_enabled(context)
+    if not media_enabled:
+        return
+
+    # 그룹/프라이빗에 따라 미디어 반응 확률을 다르게 적용
+    is_group = (update.effective_chat and update.effective_chat.type != "private")
+    media_prob = MEDIA_PROB_GROUP if is_group else MEDIA_PROB_PRIVATE
+    if not explicit_media_request:
+        # 명시 요구 없으면 확률 기반으로만 반응
+        if random.random() > media_prob:
+            return
+
     if not reaction_query and not explicit_media_request and not reaction_category:
         return
 
@@ -345,6 +405,10 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("clear_memory", clear_memory_command))
+    application.add_handler(CommandHandler("list_stickers", list_stickers_command))
+    application.add_handler(CommandHandler("enable_media", enable_media_command))
+    application.add_handler(CommandHandler("disable_media", disable_media_command))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     application.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
 

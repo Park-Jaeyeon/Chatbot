@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class MemoryStore:
@@ -16,6 +16,9 @@ class MemoryStore:
     def save(self, chat_id: int, history: List[dict[str, str]]) -> None:
         raise NotImplementedError
 
+    def clear(self, chat_id: int) -> None:
+        raise NotImplementedError
+
 
 class JsonFileMemoryStore(MemoryStore):
     """Very small JSON-file based memory store.
@@ -24,8 +27,9 @@ class JsonFileMemoryStore(MemoryStore):
     Intended only for local experimentation, not for production scale.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, max_messages: int = 120) -> None:
         self._path = path
+        self._max_messages = max_messages
         self._lock = threading.Lock()
         # Ensure parent directory exists (e.g. ROOT_DIR / "data")
         if self._path.parent:
@@ -65,6 +69,14 @@ class JsonFileMemoryStore(MemoryStore):
         key = str(chat_id)
         with self._lock:
             data = self._read_all()
-            data[key] = list(history)
+            trimmed = list(history)[-self._max_messages :] if self._max_messages else list(history)
+            data[key] = trimmed
             self._write_all(data)
 
+    def clear(self, chat_id: int) -> None:
+        key = str(chat_id)
+        with self._lock:
+            data = self._read_all()
+            if key in data:
+                data.pop(key, None)
+                self._write_all(data)
