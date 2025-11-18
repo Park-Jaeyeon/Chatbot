@@ -544,7 +544,7 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
             raise
         return
 
-    # 1) 텍스트 요약/응답 (Gemma/Gemini) - 빠르게 응답하기 위해 타임아웃 적용
+    # 1) 텍스트 요약/응답 (Gemma) - 빠르게 응답하기 위해 타임아웃 적용
     reply_text = ""
     prompt = _build_prompt_with_history([], query)
     try:
@@ -560,42 +560,19 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     except (GemmaClientError, asyncio.TimeoutError):
         reply_text = ""
 
-    # Gemma 가 실패했을 때만 Gemini 를 시도한다.
+    # 인라인에서는 Gemini 폴백을 사용하지 않고,
+    # Gemma 가 실패하면 간단한 안내 문구를 반환한다.
     if not reply_text:
-        gemini_client = _get_gemini_client(context)
-        if gemini_client:
-            try:
-                gemini_response = await asyncio.wait_for(
-                    gemini_client.generate(
-                        prompt,
-                        system_prompt=DEFAULT_SYSTEM_PROMPT,
-                    ),
-                    timeout=INLINE_TEXT_TIMEOUT,
-                )
-                reply_text = gemini_response.text.strip()
-            except (GeminiClientError, asyncio.TimeoutError):
-                reply_text = ""
+        reply_text = "지금은 인라인으로 답변을 생성하지 못했다. 채팅에서 직접 물어봐라."
 
-    if reply_text:
-        results.append(
-            InlineQueryResultArticle(
-                id=str(uuid4()),
-                title="해병 톤 답변",
-                description=reply_text[:60] + ("..." if len(reply_text) > 60 else ""),
-                input_message_content=InputTextMessageContent(reply_text),
-            )
+    results.append(
+        InlineQueryResultArticle(
+            id=str(uuid4()),
+            title="해병 톤 답변",
+            description=reply_text[:60] + ("..." if len(reply_text) > 60 else ""),
+            input_message_content=InputTextMessageContent(reply_text),
         )
-
-    # 결과가 없다면 기본 안내라도 반환
-    if not results:
-        results.append(
-            InlineQueryResultArticle(
-                id=str(uuid4()),
-                title="답변을 생성하지 못했다",
-                description="질문을 조금 다르게 적어봐라.",
-                input_message_content=InputTextMessageContent("답변을 생성하지 못했다. 질문을 다시 적어봐라."),
-            )
-        )
+    )
 
     try:
         await update.inline_query.answer(results, cache_time=3, is_personal=True)
