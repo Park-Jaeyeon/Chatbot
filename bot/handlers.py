@@ -33,6 +33,9 @@ MEDIA_PROB_GROUP = 0.35
 MEDIA_PROB_PRIVATE = 0.6
 # 스티커 사용 시 허용 사용자 id 리스트 (없으면 전체)
 STICKER_ALLOWED_USERS_KEY = "sticker_allowed_users"
+# 인라인 처리 타임아웃 (초)
+INLINE_TEXT_TIMEOUT = 6.0
+INLINE_MEDIA_TIMEOUT = 3.0
 
 DEFAULT_SYSTEM_PROMPT = dedent(
     """
@@ -522,31 +525,37 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.inline_query.answer(results, cache_time=5, is_personal=True)
         return
 
-    # 1) 텍스트 요약/응답 (Gemma/Gemini)
+    # 1) 텍스트 요약/응답 (Gemma/Gemini) - 빠르게 응답하기 위해 타임아웃 적용
     reply_text = ""
     prompt = _build_prompt_with_history([], query)
     try:
         gemma_client = _get_client(context)
-        gemma_response = await gemma_client.generate(
-            prompt,
-            system_prompt=DEFAULT_SYSTEM_PROMPT,
+        gemma_response = await asyncio.wait_for(
+            gemma_client.generate(
+                prompt,
+                system_prompt=DEFAULT_SYSTEM_PROMPT,
+            ),
+            timeout=INLINE_TEXT_TIMEOUT,
         )
         reply_text = gemma_response.text.strip()
         if reply_text.upper() == "UNSURE":
             reply_text = ""
-    except GemmaClientError:
+    except (GemmaClientError, asyncio.TimeoutError):
         reply_text = ""
 
     if not reply_text:
         gemini_client = _get_gemini_client(context)
         if gemini_client:
             try:
-                gemini_response = await gemini_client.generate(
-                    prompt,
-                    system_prompt=DEFAULT_SYSTEM_PROMPT,
+                gemini_response = await asyncio.wait_for(
+                    gemini_client.generate(
+                        prompt,
+                        system_prompt=DEFAULT_SYSTEM_PROMPT,
+                    ),
+                    timeout=INLINE_TEXT_TIMEOUT,
                 )
                 reply_text = gemini_response.text.strip()
-            except GeminiClientError:
+            except (GeminiClientError, asyncio.TimeoutError):
                 reply_text = ""
 
     if reply_text:
@@ -563,7 +572,10 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     media_client = _get_media_client(context)
     if media_client:
         try:
-            gif = await media_client.search_gif(query)
+            gif = await asyncio.wait_for(
+                media_client.search_gif(query),
+                timeout=INLINE_MEDIA_TIMEOUT,
+            )
             if gif:
                 results.append(
                     InlineQueryResultGif(
@@ -573,7 +585,7 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
                         title="움짤 하나 던진다",
                     )
                 )
-        except MediaClientError:
+        except (MediaClientError, asyncio.TimeoutError):
             logger.exception("인라인 GIF 검색 실패")
 
     # 결과가 없다면 기본 안내라도 반환
@@ -587,7 +599,14 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         )
 
-    await update.inline_query.answer(results, cache_time=3, is_personal=True)
+    try:
+        await update.inline_query.answer(results, cache_time=3, is_personal=True)
+    except telegram.error.BadRequest as exc:
+        # 오래된 쿼리(혹은 중복 응답) 에러는 무시
+        if "Query is too old" in str(exc) or "query id is invalid" in str(exc):
+            logger.warning("인라인 쿼리 응답 실패 (stale): %s", exc)
+            return
+        raise
 
 
 def register_handlers(application: Application) -> None:
