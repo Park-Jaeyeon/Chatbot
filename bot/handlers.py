@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from textwrap import dedent
 from collections import deque
 
@@ -57,7 +58,8 @@ DEFAULT_SYSTEM_PROMPT = dedent(
     응답 형식:
     - 첫 줄은 핵심 요약 한 줄로 군대식 결의문처럼 말한다.
     - 이어서 번호 없이 짧은 bullet 3~5개로 실천 포인트를 정리하고, 각 bullet 옆에 짧은 군대식 코멘트를 붙인다.
-    - “1단계/2단계/1.” 같은 숫자·단계 라벨과 step/스텝 표현은 절대 쓰지 말고, bullet 표시는 하이픈(-)만 사용한다.
+    - “1단계/2단계/1.” 같은 숫자·단계 라벨, step/스텝, 번호 매기기(1), 2), 3. 등은 절대 쓰지 말고, bullet 표시는 하이픈(-)만 사용한다.
+    - 사용자가 단계 형식으로 물어보더라도, 답변에서는 단계/숫자 라벨을 사용하지 말고 평문 + 하이픈 bullet 만 사용한다.
     - 답변은 2~3문단 또는 bullet 3~5개 내에서 끝낸다.
     - 중요한 결론 뒤에는 짧은 결의문을 붙인다(예: “정리 끝. 이제 실행만 남았다.”).
     - 책임·근성·반복을 강조하는 문장을 자주 섞는다(예: “니가 선택한 거다. 선택했으면 책임져라.”, “안 되면 될 때까지 한다.”).
@@ -148,6 +150,34 @@ def _get_learning_store(context: ContextTypes.DEFAULT_TYPE) -> LearningStore | N
     if isinstance(store, LearningStore):
         return store
     return None
+
+
+def _normalize_bullets(text: str) -> str:
+    """LLM 이 단계/숫자 라벨을 써도 하이픈 bullet 로 정규화한다."""
+
+    lines = text.splitlines()
+    normalized: list[str] = []
+    for line in lines:
+        raw = line.rstrip("\n")
+        stripped = raw.lstrip()
+
+        # 1단계. ..., 2 단계: ... 같은 패턴
+        m = re.match(r"^(\d+)\s*단계[.:)\-]?\s*(.*)$", stripped)
+        if m:
+            content = m.group(2).strip()
+            normalized.append(f"- {content}" if content else "-")
+            continue
+
+        # 1. 내용 / 1) 내용 / 1 ) 내용 등 숫자 bullet
+        m = re.match(r"^(\d+)[\.\)]\s*(.*)$", stripped)
+        if m:
+            content = m.group(2).strip()
+            normalized.append(f"- {content}" if content else "-")
+            continue
+
+        normalized.append(raw)
+
+    return "\n".join(normalized)
 
 
 def _infer_reaction_query(text: str) -> str | None:
@@ -460,6 +490,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
+    reply_text = _normalize_bullets(reply_text)
     await message.reply_text(reply_text)
     _update_history(context, chat_id, text, reply_text)
 
@@ -635,6 +666,8 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not reply_text:
         reply_text = "지금은 인라인으로 답변을 생성하지 못했다. 채팅에서 직접 물어봐라."
+
+    reply_text = _normalize_bullets(reply_text)
 
     results.append(
         InlineQueryResultArticle(
