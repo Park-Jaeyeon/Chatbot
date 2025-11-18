@@ -289,22 +289,13 @@ def _update_history(
 
 
 def _build_prompt_with_history(history: list[dict[str, str]], user_text: str) -> str:
-    if not history:
-        return f"사용자: {user_text}\n챗봇:"
+    """현재 사용자 발화만으로 프롬프트를 구성한다.
 
-    lines: list[str] = []
-    lines.append("아래는 사용자와 챗봇 사이의 이전 대화입니다.")
-    for turn in history:
-        role = "사용자" if turn.get("role") == "user" else "챗봇"
-        text = turn.get("text", "").strip()
-        if text:
-            lines.append(f"{role}: {text}")
+    이전 히스토리는 LLM 프롬프트에 포함하지 않고,
+    내부 학습/매칭(/learn, 메모리 등)에만 사용한다.
+    """
 
-    lines.append("")
-    lines.append("위의 대화를 자연스럽게 이어서 다음 사용자의 발화에 답변해 주세요.")
-    lines.append(f"사용자: {user_text}")
-    lines.append("챗봇:")
-    return "\n".join(lines)
+    return f"사용자: {user_text}\n황근출 해병:"
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
