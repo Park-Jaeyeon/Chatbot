@@ -15,8 +15,12 @@ if str(ROOT_DIR) not in sys.path:
 
 from config import MissingSettingError, Settings, settings
 from bot.gemma_client import GEMMA_CLIENT_KEY, GemmaClient
-from bot.handlers import register_handlers
+from bot.gemini_client import GEMINI_CLIENT_KEY, GeminiClient
 from bot.logger import configure_logging
+from bot.memory import JsonFileMemoryStore
+from bot.media_client import MEDIA_CLIENT_KEY, TenorClient
+from bot.stickers import STICKER_STORE_KEY, StickerStore
+from bot.handlers import register_handlers
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +34,43 @@ def build_application(app_settings: Settings) -> Application:
         timeout=app_settings.request_timeout,
     )
 
+    gemini_client: GeminiClient | None = None
+    if app_settings.gemini_api_key:
+        gemini_client = GeminiClient(
+            api_key=app_settings.gemini_api_key,
+            base_url=app_settings.gemini_base_url,
+            model=app_settings.gemini_model,
+            timeout=app_settings.request_timeout,
+        )
+
+    # Very lightweight JSON-based memory store so the bot can
+    # remember recent conversations per chat across restarts.
+    memory_store = JsonFileMemoryStore(ROOT_DIR / "data" / "user_memory.json")
+
+    # Simple JSON store for reaction stickers per category.
+    sticker_store = StickerStore(ROOT_DIR / "data" / "stickers.json")
+
+    media_client: TenorClient | None = None
+    if app_settings.tenor_api_key:
+        media_client = TenorClient(
+            api_key=app_settings.tenor_api_key,
+            timeout=min(app_settings.request_timeout, 10.0),
+        )
+
     async def _post_init(application: Application) -> None:
         await gemma_client.start()
         application.bot_data[GEMMA_CLIENT_KEY] = gemma_client
+
+        if gemini_client is not None:
+            await gemini_client.start()
+            application.bot_data[GEMINI_CLIENT_KEY] = gemini_client
+
+        if media_client is not None:
+            await media_client.start()
+            application.bot_data[MEDIA_CLIENT_KEY] = media_client
+
+        application.bot_data["memory_store"] = memory_store
+        application.bot_data[STICKER_STORE_KEY] = sticker_store
         logger.info(
             "Gemma client 초기화 완료 | model=%s | base_url=%s",
             gemma_client.model,
@@ -41,8 +79,16 @@ def build_application(app_settings: Settings) -> Application:
 
     async def _post_shutdown(application: Application) -> None:
         await gemma_client.aclose()
+        if gemini_client is not None:
+            await gemini_client.aclose()
+        if media_client is not None:
+            await media_client.aclose()
         application.bot_data.pop(GEMMA_CLIENT_KEY, None)
-        logger.info("Gemma client 연결을 정상적으로 종료했습니다.")
+        application.bot_data.pop(GEMINI_CLIENT_KEY, None)
+        application.bot_data.pop(MEDIA_CLIENT_KEY, None)
+        application.bot_data.pop("memory_store", None)
+        application.bot_data.pop(STICKER_STORE_KEY, None)
+        logger.info("Gemma/Gemini/Media/Sticker client 연결을 정상적으로 종료했습니다.")
 
     application = (
         ApplicationBuilder()
